@@ -1,599 +1,809 @@
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
-from supabase import create_client, Client
-from io import BytesIO
-import json
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
 
-# Load environment variables
-load_dotenv()
-
-# ====== Supabase Configuration ======
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("❌ משתני הסביבה של Supabase לא מוגדרים!")
-    st.stop()
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ====== Page Config ======
-st.set_page_config(
-    page_title="Command Center - אוגדה",
-    page_icon="🎖️",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-# ====== Hebrew CSS & Auto-Refresh ======
-st.markdown("""
-<style>
-    * {
-        font-family: 'Heebo', 'Segoe UI', sans-serif;
-        direction: rtl;
-    }
-    
-    .main {
-        direction: rtl;
-    }
-    
-    .header-main {
-        background: linear-gradient(135deg, #4E5A37 0%, #7B8A62 100%);
-        color: white;
-        padding: 30px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    
-    .brigade-card {
-        border-left: 5px solid;
-        padding: 15px;
-        border-radius: 8px;
-        background: white;
-        margin: 10px 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .status-critical {
-        border-left-color: #ff4444;
-        background-color: #fff0f0;
-    }
-    
-    .status-warning {
-        border-left-color: #ff9800;
-        background-color: #fff8f0;
-    }
-    
-    .status-good {
-        border-left-color: #4CAF50;
-        background-color: #f0fff0;
-    }
-    
-    .task-critical {
-        background: #ffebee;
-        border-right: 3px solid #ff4444;
-    }
-    
-    .task-high {
-        background: #fff3e0;
-        border-right: 3px solid #ff9800;
-    }
-    
-    .task-normal {
-        background: #f5f5f5;
-        border-right: 3px solid #2196F3;
-    }
-    
-    .metric-box {
-        text-align: center;
-        padding: 15px;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #4E5A37 0%, #7B8A62 100%);
-        color: white;
-        margin: 5px;
-    }
-    
-    .urgent-banner {
-        background: #ff4444;
-        color: white;
-        padding: 20px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        font-size: 1.2em;
-        font-weight: bold;
-    }
-</style>
-
-<meta http-equiv="refresh" content="60">
-""", unsafe_allow_html=True)
-
-# ====== Brigade Names ======
-BRIGADES = [
-    "חטמ״ר בנימין",
-    "חטמ״ר שומרון",
-    "חטמ״ר אפרים",
-    "חטמ״ר עציון",
-    "חטמ״ר יהודה",
-    "חטמ״ר מנשה"
-]
-
-# ====== Database Functions ======
-def get_all_tasks():
-    """Get all tasks from Supabase"""
-    try:
-        response = supabase.table("tasks").select("*").execute()
-        return response.data if response.data else []
-    except Exception as e:
-        st.error(f"❌ שגיאה בטעינת משימות: {str(e)}")
-        return []
-
-def get_brigade_tasks(brigade: str):
-    """Get tasks for specific brigade"""
-    try:
-        response = supabase.table("tasks").select("*").eq("brigade", brigade).execute()
-        return response.data if response.data else []
-    except Exception as e:
-        st.error(f"❌ שגיאה: {str(e)}")
-        return []
-
-def add_task(title: str, description: str, brigade: str, deadline: str, priority: str):
-    """Add new task"""
-    try:
-        task_data = {
-            "title": title,
-            "description": description,
-            "brigade": brigade,
-            "deadline": deadline,
-            "priority": priority,
-            "completed": False,
-            "created_at": datetime.now().isoformat(),
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מערך הרבנות - פקודות ומשימות</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Heebo', 'sans-serif'] },
+                    colors: {
+                        idf: { light: '#7B8A62', DEFAULT: '#4E5A37', dark: '#2E3521' },
+                        gold: { DEFAULT: '#D4AF37', light: '#F3E5AB' }
+                    }
+                }
+            }
         }
-        
-        response = supabase.table("tasks").insert(task_data).execute()
-        
-        if response.data:
-            st.success(f"✅ משימה '{title}' נוספה!")
-            st.rerun()
-            return True
-        else:
-            st.error("❌ שגיאה בהוספת משימה")
-            return False
-            
-    except Exception as e:
-        st.error(f"❌ שגיאה: {str(e)}")
-        return False
-
-def update_task(task_id: int, **kwargs):
-    """Update task"""
-    try:
-        response = supabase.table("tasks").update(kwargs).eq("id", task_id).execute()
-        if response.data:
-            st.rerun()
-            return True
-        else:
-            st.error("❌ שגיאה בעדכון")
-            return False
-    except Exception as e:
-        st.error(f"❌ שגיאה: {str(e)}")
-        return False
-
-def delete_task(task_id: int):
-    """Delete task"""
-    try:
-        response = supabase.table("tasks").delete().eq("id", task_id).execute()
-        st.success("✅ משימה נמחקה!")
-        st.rerun()
-        return True
-    except Exception as e:
-        st.error(f"❌ שגיאה: {str(e)}")
-        return False
-
-def toggle_task(task_id: int, current_status: bool):
-    """Toggle task completion"""
-    new_status = not current_status
-    completed_at = datetime.now().isoformat() if new_status else None
-    return update_task(task_id, completed=new_status, completed_at=completed_at)
-
-# ====== Analytics Functions ======
-def calculate_stats(tasks):
-    """Calculate overall statistics"""
-    total = len(tasks)
-    completed = len([t for t in tasks if t.get("completed")])
-    pending = total - completed
-    overdue = len([t for t in tasks 
-                   if not t.get("completed") and t.get("deadline") and 
-                   datetime.fromisoformat(t["deadline"]).date() < datetime.now().date()])
-    
-    return {
-        "total": total,
-        "completed": completed,
-        "pending": pending,
-        "overdue": overdue,
-        "percentage": round((completed / total * 100) if total > 0 else 0, 1)
-    }
-
-def get_brigade_stats(tasks):
-    """Get stats by brigade"""
-    stats = {}
-    
-    for brigade in BRIGADES:
-        brigade_tasks = [t for t in tasks if t.get("brigade") == brigade]
-        completed = len([t for t in brigade_tasks if t.get("completed")])
-        total = len(brigade_tasks)
-        overdue = len([t for t in brigade_tasks 
-                      if not t.get("completed") and t.get("deadline") and 
-                      datetime.fromisoformat(t["deadline"]).date() < datetime.now().date()])
-        
-        stats[brigade] = {
-            "total": total,
-            "completed": completed,
-            "pending": total - completed,
-            "overdue": overdue,
-            "percentage": round((completed / total * 100) if total > 0 else 0, 1)
+    </script>
+    <style>
+        body {
+            background-color: #f1f5f0;
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239ca3af' fill-opacity='0.08'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
         }
-    
-    return stats
 
-def get_critical_tasks(tasks):
-    """Get critical/overdue tasks"""
-    critical = []
-    
-    for task in tasks:
-        if task.get("completed"):
-            continue
-        
-        # High priority + overdue = CRITICAL
-        if task.get("priority") == "critical":
-            critical.append(("critical", task))
-        elif task.get("priority") == "high" and task.get("deadline"):
-            if datetime.fromisoformat(task["deadline"]).date() < datetime.now().date():
-                critical.append(("critical", task))
-        # Overdue = WARNING
-        elif task.get("deadline"):
-            if datetime.fromisoformat(task["deadline"]).date() < datetime.now().date():
-                critical.append(("warning", task))
-    
-    return sorted(critical, key=lambda x: x[1].get("deadline", "9999-12-31"))
+        /* Checkbox */
+        .task-checkbox {
+            appearance: none;
+            background-color: #fff;
+            width: 1.4em;
+            height: 1.4em;
+            border: 2px solid #cbd5e1;
+            border-radius: 0.3em;
+            display: grid;
+            place-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+            margin-top: 3px;
+        }
 
-# ====== Export Functions ======
-def export_to_excel(tasks):
-    """Export tasks to Excel"""
-    df = pd.DataFrame(tasks)
-    
-    # Format for Excel
-    if not df.empty:
-        df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d')
-        df['deadline'] = pd.to_datetime(df['deadline']).dt.strftime('%Y-%m-%d')
-        df['completed'] = df['completed'].map({True: 'כן', False: 'לא'})
-    
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='משימות')
-    
-    output.seek(0)
-    return output.getvalue()
+        .task-checkbox::before {
+            content: "";
+            width: 0.75em;
+            height: 0.75em;
+            clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+            transform: scale(0);
+            background-color: white;
+            transition: 120ms transform ease-in-out;
+        }
 
-def export_to_csv(tasks):
-    """Export tasks to CSV"""
-    df = pd.DataFrame(tasks)
-    
-    if not df.empty:
-        df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d')
-        df['deadline'] = pd.to_datetime(df['deadline']).dt.strftime('%Y-%m-%d')
-        df['completed'] = df['completed'].map({True: 'כן', False: 'לא'})
-    
-    return df.to_csv(index=False).encode('utf-8-sig')
+        .task-checkbox:checked {
+            background-color: #4E5A37;
+            border-color: #4E5A37;
+        }
 
-def generate_whatsapp_report(tasks, brigade_stats):
-    """Generate WhatsApp-friendly report"""
-    report = f"""
-🎖️ דוח שבועי - אוגדה {datetime.now().strftime('%d.%m.%Y')}
+        .task-checkbox:checked::before {
+            transform: scale(1);
+        }
 
-📊 תמונת מצב כללית:
-───────────────────
-סך הכל משימות: {len(tasks)}
-הושלמו: {len([t for t in tasks if t.get('completed')])}
-בתהליך: {len([t for t in tasks if not t.get('completed')])}
-באיחור: {len([t for t in tasks if not t.get('completed') and t.get('deadline') and datetime.fromisoformat(t['deadline']).date() < datetime.now().date()])}
+        .task-row:has(.task-checkbox:checked) .task-title {
+            color: #9ca3af;
+            text-decoration: line-through;
+        }
 
-📈 פירוט לפי חטמ"ר:
-───────────────────
-"""
-    
-    for brigade, stats in brigade_stats.items():
-        brigade_short = brigade.replace("חטמ״ר ", "")
-        report += f"\n{brigade_short}:"
-        report += f"\n  הושלמו: {stats['completed']}/{stats['total']} ({stats['percentage']}%)"
-        if stats['overdue'] > 0:
-            report += f"\n  ⚠️ באיחור: {stats['overdue']}"
-    
-    report += f"\n\n✅ דוח זה נוצר ב-{datetime.now().strftime('%H:%M')} ביום {datetime.now().strftime('%d.%m.%Y')}"
-    
-    return report
+        .task-row:has(.task-checkbox:checked) .task-desc {
+            color: #d1d5db;
+        }
 
-# ====== Main App ======
-def main():
-    # Header
-    st.markdown("""
-    <div class="header-main">
-        <h1>🎖️ Command Center - מערכת בקרה אוגדתית</h1>
-        <p>עקוב אחרי משימות בזמן אמת | עדכונים אוטומטיים כל 60 שניות</p>
+        .task-row:has(.task-checkbox:checked) {
+            opacity: 0.75;
+            background-color: #f8fafc;
+        }
+
+        /* Tabs */
+        .tab-btn {
+            transition: all 0.2s;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab-btn.active {
+            border-bottom-color: #4E5A37;
+            color: #4E5A37;
+            font-weight: 800;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Progress ring */
+        .progress-ring-circle {
+            transition: stroke-dashoffset 0.5s ease;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+
+            body {
+                background: white;
+            }
+        }
+    </style>
+</head>
+
+<body class="text-gray-800 antialiased pb-16 font-sans">
+
+    <!-- ======================== LOGIN SCREEN ======================== -->
+    <div id="loginScreen" class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl shadow-xl p-8 md:p-12 w-full max-w-md text-center">
+            <div class="bg-idf rounded-2xl p-6 mb-6 text-white">
+                <i class="ph-fill ph-star-of-david text-5xl text-gold block mb-2"></i>
+                <h1 class="text-2xl font-extrabold">מערך הרבנות</h1>
+                <p class="text-gray-300 text-sm mt-1">פקודות ומשימות - פורים ופסח</p>
+            </div>
+            <h2 class="text-xl font-bold text-gray-700 mb-6">מי אתה?</h2>
+            <div class="grid grid-cols-2 gap-3 mb-6">
+                <button onclick="login('רב האוגדה')"
+                    class="login-btn col-span-2 bg-gold text-idf-dark font-bold py-3 px-4 rounded-xl hover:opacity-90 transition flex items-center justify-center gap-2 text-lg">
+                    <i class="ph-fill ph-crown"></i> רב האוגדה
+                </button>
+                <button onclick="login('בנימין')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    בנימין</button>
+                <button onclick="login('שומרון')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    שומרון</button>
+                <button onclick="login('אפרים')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    אפרים</button>
+                <button onclick="login('מנשה')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    מנשה</button>
+                <button onclick="login('יהודה')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    יהודה</button>
+                <button onclick="login('עציון')"
+                    class="login-btn bg-idf text-white font-bold py-3 px-4 rounded-xl hover:bg-idf-light transition">חטמ"ר
+                    עציון</button>
+            </div>
+            <p class="text-xs text-gray-400">הבחירה נשמרת בדפדפן שלך</p>
+        </div>
     </div>
-    """, unsafe_allow_html=True)
-    
-    # Get all tasks
-    all_tasks = get_all_tasks()
-    overall_stats = calculate_stats(all_tasks)
-    brigade_stats = get_brigade_stats(all_tasks)
-    critical_tasks = get_critical_tasks(all_tasks)
-    
-    # ====== CRITICAL ALERTS ======
-    if critical_tasks:
-        st.markdown('<div class="urgent-banner">⚠️ יש משימות קריטיות באיחור!</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.metric("🔴 קריטיות", len([t for t, s in critical_tasks if s == "critical"]))
-        with col2:
-            for severity, task in critical_tasks[:3]:  # Show top 3
-                emoji = "🔴" if severity == "critical" else "🟠"
-                st.warning(f"{emoji} **{task['title']}** ({task['brigade']})")
-    
-    # ====== DASHBOARD METRICS ======
-    st.markdown("## 📊 תמונת מצב כללית")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="metric-box">
-            <h3>סך הכל</h3>
-            <h2>{overall_stats['total']}</h2>
-            משימות
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="metric-box" style="background: linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%);">
-            <h3>✅ הושלמו</h3>
-            <h2>{overall_stats['completed']}</h2>
-            {overall_stats['percentage']}%
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div class="metric-box" style="background: linear-gradient(135deg, #2196F3 0%, #42A5F5 100%);">
-            <h3>⏳ בתהליך</h3>
-            <h2>{overall_stats['pending']}</h2>
-            משימות
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown(f"""
-        <div class="metric-box" style="background: linear-gradient(135deg, #FF9800 0%, #FFB74D 100%);">
-            <h3>⚠️ קרוב לדדליין</h3>
-            <h2>{len([t for t in all_tasks if not t.get('completed') and t.get('deadline') and (datetime.fromisoformat(t['deadline']).date() - datetime.now().date()).days <= 3])}</h2>
-            משימות
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col5:
-        st.markdown(f"""
-        <div class="metric-box" style="background: linear-gradient(135deg, #F44336 0%, #EF5350 100%);">
-            <h3>❌ באיחור</h3>
-            <h2>{overall_stats['overdue']}</h2>
-            משימות
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.divider()
-    
-    # ====== PROGRESS VISUALIZATION ======
-    st.markdown("## 📈 אחוז השלמה כללי")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fig = go.Figure(data=[go.Pie(
-            labels=["הושלמו", "בתהליך"],
-            values=[overall_stats["completed"], overall_stats["pending"]],
-            hole=0.6,
-            marker=dict(colors=["#4CAF50", "#e5e7eb"]),
-            textinfo="label+percent"
-        )])
-        
-        fig.update_layout(height=400, margin=dict(l=0, r=0, t=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div style="text-align: center; padding: 40px 20px;">
-            <h1 style="color: #4E5A37; font-size: 3em;">{overall_stats['percentage']}%</h1>
-            <p style="color: #666; font-size: 1.1em;">השלמה כללית</p>
-            <p style="color: #999;">{overall_stats['completed']} מתוך {overall_stats['total']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.divider()
-    
-    # ====== BRIGADE BREAKDOWN ======
-    st.markdown("## 🏘️ מצב לפי חטמ״ר")
-    
-    # Create 2 columns for brigades
-    cols = st.columns(2)
-    
-    for idx, (brigade, stats) in enumerate(brigade_stats.items()):
-        with cols[idx % 2]:
-            # Determine status color
-            if stats['overdue'] > 0:
-                status_class = "status-critical"
-                status_emoji = "🔴"
-            elif stats['percentage'] < 50:
-                status_class = "status-warning"
-                status_emoji = "🟠"
-            else:
-                status_class = "status-good"
-                status_emoji = "🟢"
-            
-            brigade_short = brigade.replace("חטמ״ר ", "")
-            
-            st.markdown(f"""
-            <div class="brigade-card {status_class}">
-                <h3>{status_emoji} {brigade}</h3>
-                <p><strong>הושלמו:</strong> {stats['completed']}/{stats['total']} ({stats['percentage']}%)</p>
-                <p><strong>בתהליך:</strong> {stats['pending']}</p>
-                {"<p style='color: red;'><strong>⚠️ באיחור:</strong> " + str(stats['overdue']) + "</p>" if stats['overdue'] > 0 else ""}
-                <div style="background: #e0e0e0; height: 8px; border-radius: 5px; margin-top: 10px;">
-                    <div style="background: #4E5A37; height: 100%; width: {stats['percentage']}%; border-radius: 5px;"></div>
+
+    <!-- ======================== MAIN APP ======================== -->
+    <div id="mainApp" class="hidden">
+
+        <!-- Header -->
+        <header class="bg-idf text-white shadow-lg sticky top-0 z-50">
+            <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <i class="ph-fill ph-star-of-david text-3xl text-gold"></i>
+                    <div>
+                        <h1 class="text-lg md:text-xl font-extrabold leading-tight">מערך הרבנות - פקודות ומשימות</h1>
+                        <p class="text-xs text-gray-300">מחובר בתור: <span id="userLabel"
+                                class="text-gold font-bold"></span></p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="exportToExcel()"
+                        class="no-print hidden md:flex items-center gap-1 bg-green-700 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-green-800 transition font-bold">
+                        <i class="ph ph-microsoft-excel-logo"></i> אקסל
+                    </button>
+                    <button onclick="logout()"
+                        class="no-print flex items-center gap-1 bg-white/20 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-white/30 transition font-bold">
+                        <i class="ph ph-sign-out"></i> <span class="hidden md:inline">החלף משתמש</span>
+                    </button>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-    
-    st.divider()
-    
-    # ====== TASKS BY BRIGADE ======
-    st.markdown("## 📝 משימות פעילות")
-    
-    selected_brigade = st.selectbox("בחר חטמ״ר לצפייה בפרטים", ["הכל"] + BRIGADES)
-    
-    if selected_brigade == "הכל":
-        display_tasks = [t for t in all_tasks if not t.get("completed")]
-    else:
-        display_tasks = [t for t in all_tasks if t.get("brigade") == selected_brigade and not t.get("completed")]
-    
-    # Sort by priority and deadline
-    priority_order = {"critical": 0, "high": 1, "normal": 2}
-    display_tasks.sort(key=lambda x: (
-        priority_order.get(x.get("priority", "normal"), 2),
-        x.get("deadline", "9999-12-31")
-    ))
-    
-    if not display_tasks:
-        st.info("✅ אין משימות פעילות!")
-    else:
-        for task in display_tasks:
-            priority_class = f"task-{task.get('priority', 'normal')}"
-            priority_emoji = {"critical": "🔴", "high": "🟠", "normal": "⚪"}.get(task.get("priority", "normal"), "⚪")
-            
-            col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1.5, 1, 0.5])
-            
-            with col1:
-                if st.checkbox("✓", value=False, key=f"check_{task['id']}"):
-                    toggle_task(task['id'], False)
-            
-            with col2:
-                st.markdown(f"**{task['title']}** {priority_emoji}")
-                if task.get("description"):
-                    st.caption(task['description'])
-            
-            with col3:
-                if task.get("deadline"):
-                    deadline_date = datetime.fromisoformat(task["deadline"]).date()
-                    days_left = (deadline_date - datetime.now().date()).days
-                    if days_left < 0:
-                        st.caption(f"📅 באיחור {abs(days_left)} ימים")
-                    else:
-                        st.caption(f"📅 {days_left} ימים")
-            
-            with col4:
-                st.caption(f"{task['brigade'].replace('חטמ״ר ', '')}")
-            
-            with col5:
-                if st.button("🗑️", key=f"del_{task['id']}"):
-                    delete_task(task['id'])
-    
-    st.divider()
-    
-    # ====== ADD TASK SECTION ======
-    st.markdown("## ➕ הוסף משימה חדשה")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        new_brigade = st.selectbox("בחר חטמ״ר", BRIGADES, key="add_brigade")
-    
-    with col2:
-        new_title = st.text_input("כותרת משימה", key="add_title")
-    
-    with col3:
-        new_priority = st.selectbox("עדיפות", ["normal", "high", "critical"], 
-                                    format_func=lambda x: {"normal": "🔵 רגילה", "high": "🟠 גבוהה", "critical": "🔴 קריטית"}[x],
-                                    key="add_priority")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        new_deadline = st.date_input("דדליין", key="add_deadline")
-    
-    with col2:
-        new_desc = st.text_input("תיאור קצר", key="add_desc")
-    
-    with col3:
-        if st.button("➕ הוסף משימה", use_container_width=True):
-            if new_title:
-                add_task(new_title, new_desc, new_brigade, new_deadline.isoformat(), new_priority)
-            else:
-                st.error("❌ נא להזין כותרת!")
-    
-    st.divider()
-    
-    # ====== EXPORT SECTION ======
-    st.markdown("## 📤 ייצוא דוחות")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        excel_data = export_to_excel(all_tasks)
-        st.download_button(
-            label="📊 הורד Excel",
-            data=excel_data,
-            file_name=f"tasks_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    
-    with col2:
-        csv_data = export_to_csv(all_tasks)
-        st.download_button(
-            label="📋 הורד CSV",
-            data=csv_data,
-            file_name=f"tasks_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    
-    with col3:
-        whatsapp_report = generate_whatsapp_report(all_tasks, brigade_stats)
-        st.download_button(
-            label="💬 דוח WhatsApp",
-            data=whatsapp_report,
-            file_name=f"report_{datetime.now().strftime('%Y%m%d')}.txt",
-            mime="text/plain"
-        )
-    
-    with col4:
-        if st.button("📤 העתק דוח"):
-            st.info("📌 העתק ידנית מהתיבה מתחת:")
-            st.text_area("דוח השבוע", value=whatsapp_report, height=200, disabled=True)
-    
-    st.divider()
-    
-    # ====== INFO FOOTER ======
-    st.markdown("""
-    ---
-    
-    📌 **עידכונים אוטומטיים:** הדף מתרענן כל 60 שניות  
-    🔄 **רענן ידני:** לחץ F5 או כפתור הרענן בדפדפן  
-    💾 **גיבוי נתונים:** כל הנתונים שמורים ב-Supabase  
-    
-    **Command Center עבור רבנות אוגדה**
-    """)
+            <!-- Tabs (only shown for רב האוגדה) -->
+            <div id="tabBar" class="hidden bg-idf-dark overflow-x-auto">
+                <div class="max-w-5xl mx-auto px-4 flex gap-1 min-w-max">
+                    <button class="tab-btn active text-white text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('כולם')">🌐 סקירה כללית</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('בנימין')">בנימין</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('שומרון')">שומרון</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('אפרים')">אפרים</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('מנשה')">מנשה</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('יהודה')">יהודה</button>
+                    <button class="tab-btn text-gray-300 text-sm py-2.5 px-4 whitespace-nowrap"
+                        onclick="switchTab('עציון')">עציון</button>
+                </div>
+            </div>
+            <!-- Progress bar for brigade rabbi -->
+            <div id="progressBarWrap" class="bg-idf-dark h-1.5 w-full">
+                <div id="progressBar" class="bg-gold h-full transition-all duration-500" style="width:0%"></div>
+            </div>
+        </header>
 
-if __name__ == "__main__":
-    main()
+        <main class="max-w-5xl mx-auto px-4 mt-6 space-y-6">
+
+            <!-- ===== BRIGADE RABBI VIEW ===== -->
+            <div id="brigadeView" class="hidden space-y-6">
+                <!-- Stats row -->
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="bg-white rounded-xl shadow-sm p-4 text-center border-t-4 border-idf">
+                        <p class="text-3xl font-extrabold text-idf" id="statTotal">0</p>
+                        <p class="text-xs text-gray-500 mt-1">סה"כ משימות</p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-4 text-center border-t-4 border-green-500">
+                        <p class="text-3xl font-extrabold text-green-600" id="statDone">0</p>
+                        <p class="text-xs text-gray-500 mt-1">הושלמו</p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-4 text-center border-t-4 border-orange-400">
+                        <p class="text-3xl font-extrabold text-orange-500" id="statLeft">0</p>
+                        <p class="text-xs text-gray-500 mt-1">נותרו</p>
+                    </div>
+                </div>
+
+                <!-- Global tasks (from division rabbi) -->
+                <section>
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="bg-gold/30 p-2 rounded-lg"><i class="ph-fill ph-broadcast text-idf text-xl"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-gray-800">משימות אוגדתיות</h2>
+                        <span class="text-xs bg-idf text-white px-2 py-0.5 rounded-full">מרב האוגדה</span>
+                    </div>
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                        <ul id="globalTaskList" class="divide-y divide-gray-100"></ul>
+                        <div id="globalEmpty" class="hidden p-6 text-center text-gray-400 text-sm">אין עדיין משימות
+                            אוגדתיות</div>
+                    </div>
+                </section>
+
+                <!-- Local tasks -->
+                <section>
+                    <div class="flex items-center justify-between gap-2 mb-3">
+                        <div class="flex items-center gap-2">
+                            <div class="bg-idf p-2 rounded-lg text-white"><i class="ph-fill ph-list-checks text-xl"></i>
+                            </div>
+                            <h2 class="text-xl font-bold text-gray-800">המשימות שלי</h2>
+                        </div>
+                        <button onclick="openAddTaskModal('local')"
+                            class="no-print flex items-center gap-1 bg-idf text-white text-sm px-4 py-2 rounded-full hover:bg-idf-light transition font-bold">
+                            <i class="ph ph-plus"></i> הוסף משימה
+                        </button>
+                    </div>
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                        <ul id="localTaskList" class="divide-y divide-gray-100"></ul>
+                        <div id="localEmpty" class="p-6 text-center text-gray-400 text-sm">
+                            <i class="ph ph-clipboard-text text-3xl block mb-2"></i>
+                            לחץ "+ הוסף משימה" כדי להוסיף משימה
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Schedule section -->
+                <section>
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="bg-idf-light p-2 rounded-lg text-white"><i class="ph-fill ph-calendar text-xl"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-gray-800">לו"ז שבועי: כנסים וישיבות</h2>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-white rounded-xl shadow-sm p-5 border-t-4 border-idf">
+                            <div class="flex justify-between items-start mb-2">
+                                <span class="bg-gray-100 text-gray-800 text-sm font-bold px-3 py-1 rounded-full">יום
+                                    שני</span>
+                                <i class="ph-fill ph-users-three text-idf-light text-xl"></i>
+                            </div>
+                            <h3 class="text-lg font-bold mb-2">כנס פסח פיקודי</h3>
+                            <p class="text-sm text-gray-600 mb-3"><strong>נוכחות:</strong> רבנים, נגדים וחיילי רבנות
+                                בחזית.</p>
+                            <div
+                                class="bg-yellow-50 text-yellow-800 text-sm p-3 rounded-lg border border-yellow-200 flex items-start gap-2">
+                                <i class="ph-fill ph-warning-circle mt-0.5 flex-shrink-0"></i>
+                                <span><strong>דגש:</strong> להשאיר כוח אדם בגזרה למתן מענה לכשרות.</span>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl shadow-sm p-5 border-t-4 border-idf">
+                            <div class="flex justify-between items-start mb-2">
+                                <span class="bg-gray-100 text-gray-800 text-sm font-bold px-3 py-1 rounded-full">יום
+                                    רביעי</span>
+                                <i class="ph-fill ph-chalkboard-teacher text-idf-light text-xl"></i>
+                            </div>
+                            <h3 class="text-lg font-bold mb-2">יום ישיבה אוגדתי</h3>
+                            <p class="text-sm text-gray-600 mb-3"><strong>נוכחות:</strong> כלל רבני, נגדי וחיילי אוגדת
+                                איו"ש.</p>
+                            <div
+                                class="bg-red-50 text-red-800 text-sm p-3 rounded-lg border border-red-200 flex items-start gap-2">
+                                <i class="ph-fill ph-prohibit mt-0.5 flex-shrink-0"></i>
+                                <span><strong>דגש:</strong> נוכחות חובה. אין שחרורים לאף אחד!</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Mobile export -->
+                <div class="no-print flex justify-center gap-3 md:hidden">
+                    <button onclick="exportToExcel()"
+                        class="flex items-center gap-2 bg-green-700 text-white px-5 py-2.5 rounded-full font-bold shadow hover:bg-green-800 transition text-sm">
+                        <i class="ph ph-microsoft-excel-logo"></i> ייצוא לאקסל
+                    </button>
+                </div>
+            </div>
+
+            <!-- ===== DIVISION RABBI VIEW ===== -->
+            <div id="divisionView" class="hidden">
+
+                <!-- Tab: Overview -->
+                <div id="tab-כולם" class="tab-content active space-y-6">
+                    <div class="bg-white rounded-2xl shadow-sm p-6 border-r-4 border-gold">
+                        <h2 class="text-xl font-bold mb-4 flex items-center gap-2"><i
+                                class="ph-fill ph-chart-bar text-idf text-2xl"></i> סקירה כללית - כל החטמ"רים</h2>
+                        <div id="overviewGrid" class="grid grid-cols-2 md:grid-cols-3 gap-4"></div>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-xl font-bold flex items-center gap-2"><i
+                                    class="ph-fill ph-broadcast text-gold text-2xl"></i> משימות אוגדתיות (לכולם)</h2>
+                            <button onclick="openAddTaskModal('global')"
+                                class="no-print flex items-center gap-1 bg-gold text-idf-dark text-sm px-4 py-2 rounded-full hover:opacity-90 transition font-bold">
+                                <i class="ph ph-plus"></i> הוסף לכולם
+                            </button>
+                        </div>
+                        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                            <ul id="globalTaskListAdmin" class="divide-y divide-gray-100"></ul>
+                            <div id="globalEmptyAdmin" class="hidden p-6 text-center text-gray-400 text-sm">אין עדיין
+                                משימות אוגדתיות</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Per-Brigade Tabs -->
+                <div id="tab-בנימין" class="tab-content hidden"></div>
+                <div id="tab-שומרון" class="tab-content hidden"></div>
+                <div id="tab-אפרים" class="tab-content hidden"></div>
+                <div id="tab-מנשה" class="tab-content hidden"></div>
+                <div id="tab-יהודה" class="tab-content hidden"></div>
+                <div id="tab-עציון" class="tab-content hidden"></div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ======================== ADD TASK MODAL ======================== -->
+    <div id="addTaskModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <h3 id="modalTitle" class="text-xl font-bold mb-4 text-gray-800">הוספת משימה</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">כותרת המשימה *</label>
+                    <input id="taskTitleInput" type="text"
+                        class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-idf"
+                        placeholder="כותרת קצרה וברורה">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">פירוט</label>
+                    <textarea id="taskDescInput" rows="3"
+                        class="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-idf resize-none"
+                        placeholder="הוסף הוראות, הבהרות..."></textarea>
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer text-sm">
+                    <input type="checkbox" id="taskUrgentInput" class="w-4 h-4 accent-red-600">
+                    <span class="font-medium text-red-600">סמן כ"חובת עדכון"</span>
+                </label>
+            </div>
+            <div class="flex gap-3 mt-5">
+                <button onclick="submitTask()"
+                    class="flex-1 bg-idf text-white font-bold py-2.5 rounded-xl hover:bg-idf-light transition">הוסף
+                    משימה</button>
+                <button onclick="closeModal()"
+                    class="flex-1 bg-gray-100 text-gray-700 font-bold py-2.5 rounded-xl hover:bg-gray-200 transition">ביטול</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ─── CONSTANTS ───────────────────────────────────────────────
+        const BRIGADES = ['בנימין', 'שומרון', 'אפרים', 'מנשה', 'יהודה', 'עציון'];
+        const STORAGE_KEY = 'rabbinate_v2';
+
+        // ─── DEFAULT TASKS ────────────────────────────────────────────
+        const DEFAULT_GLOBAL_TASKS = [
+            { id: 'g1', title: 'היערכות לציוד קריאה בבתי הכנסת', desc: 'יש לבדוק שיש מגילת אסתר מקלף בכל בית כנסת ומגילות מנייר. שימו את מגילת הקלף בארון הקודש והודיעו לחיילים להוציאה רק בפורים.', urgent: false, category: 'פורים' },
+            { id: 'g2', title: 'קוראי מגילה במוצבים', desc: 'לוודא ולעדכן שבכל מוצב פלוגתי יש קורא מגילה (שם + טלפון). לוודא חבירה לחב"ד המרחבי לדאוג לקריאות בפילבוקסים ובסיורים.', urgent: true, category: 'פורים' },
+            { id: 'g3', title: 'פרסום לו"ז פורים בבסיסים', desc: 'לפרסם לו"ז לתענית אסתר וקריאות מגילה: ערב (צאת הצום ולאחריו בחמ"ל), ובוקר (שחרית ולאחר שחרית).', urgent: false, category: 'פורים' },
+            { id: 'g4', title: 'הנחיות הלכה למעשה', desc: 'לפרסם הנחיות חטיבתיות על פי "הלכה כסדרה" - איך עושים משלוח מנות ומתנות לאביונים.', urgent: false, category: 'פורים' },
+            { id: 'g5', title: 'תיאום סעודות החג', desc: 'לתאם מול רס"ר מטבח: סעודה מפסקת (פתיחת צום), שבירת הצום, וסעודת החג.', urgent: false, category: 'פורים' },
+            { id: 'g6', title: 'כשרות תרומות', desc: 'לוודא מול רס"ר המחנה את תרומות משלוחי המנות המגיעות לחיילים - שהכל כשר ללא ספק.', urgent: false, category: 'פורים' },
+            { id: 'g7', title: 'קפ"ק חטיבתי מורחב', desc: 'לוודא ולעדכן שנקבע קפ"ק בראשות סמח"ט, קל"ח, רס"ר ונציגים רלוונטיים (מנהל מטבח).', urgent: true, category: 'פסח' },
+            { id: 'g8', title: 'קפ"קים גדודיים', desc: 'לוודא קיום קפ"קים בכל הגדודים (מג"ד, סמג"ד, מ"פים) בתיאום עם רב החטיבה. המטרה: היכשרות, ניקיונות והשבתות.', urgent: false, category: 'פסח' },
+            { id: 'g9', title: 'זימון אנשי מילואים', desc: 'לוודא שלכל "אנשי הפסח" יצא צו מילואים מסודר. דגש על חיילים שבפטור ובסיפוח.', urgent: false, category: 'פסח' },
+            { id: 'g10', title: 'איתור כוח אדם נוסף', desc: 'להמשיך לחפש ולאתר אנשי מילואים נוספים לטובת מאמץ ההכשרות במחנות ובמוצבים.', urgent: false, category: 'פסח' },
+        ];
+
+        // ─── STATE ────────────────────────────────────────────────────
+        let currentUser = null;
+        let currentTab = 'כולם';
+        let modalMode = null; // 'global' | 'local' | brigade name
+        let data = {};
+
+        // ─── STORAGE ─────────────────────────────────────────────────
+        function loadData() {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                data = JSON.parse(raw);
+            } else {
+                data = {
+                    globalTasks: [...DEFAULT_GLOBAL_TASKS],
+                    brigadeTasks: {},
+                    completions: {}
+                };
+                BRIGADES.forEach(b => {
+                    data.brigadeTasks[b] = [];
+                    data.completions[b] = {};
+                });
+                saveData();
+            }
+        }
+        function saveData() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        }
+
+        // ─── LOGIN ───────────────────────────────────────────────────
+        function login(user) {
+            currentUser = user;
+            localStorage.setItem('currentUser', user);
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('mainApp').classList.remove('hidden');
+            document.getElementById('userLabel').textContent = user === 'רב האוגדה' ? 'רב האוגדה' : 'חטמ"ר ' + user;
+            if (user === 'רב האוגדה') {
+                document.getElementById('tabBar').classList.remove('hidden');
+                document.getElementById('divisionView').classList.remove('hidden');
+                document.getElementById('progressBarWrap').classList.add('hidden');
+                renderDivisionView();
+            } else {
+                document.getElementById('brigadeView').classList.remove('hidden');
+                document.getElementById('progressBarWrap').classList.remove('hidden');
+                renderBrigadeView(user);
+            }
+        }
+        function logout() {
+            localStorage.removeItem('currentUser');
+            location.reload();
+        }
+
+        // ─── RENDER: BRIGADE ─────────────────────────────────────────
+        function renderBrigadeView(brigade) {
+            renderGlobalTaskList('globalTaskList', 'globalEmpty', brigade);
+            renderLocalTaskList(brigade);
+            updateStats(brigade);
+        }
+
+        function renderGlobalTaskList(listId, emptyId, brigade) {
+            const ul = document.getElementById(listId);
+            const empty = document.getElementById(emptyId);
+            ul.innerHTML = '';
+            if (!data.globalTasks || data.globalTasks.length === 0) {
+                empty.classList.remove('hidden'); return;
+            }
+            empty.classList.add('hidden');
+            data.globalTasks.forEach(task => {
+                const checked = data.completions[brigade] && data.completions[brigade]['g_' + task.id];
+                ul.appendChild(createTaskItem(task, checked, (val) => {
+                    if (!data.completions[brigade]) data.completions[brigade] = {};
+                    data.completions[brigade]['g_' + task.id] = val;
+                    saveData();
+                    updateStats(brigade);
+                }, false));
+            });
+        }
+
+        function renderLocalTaskList(brigade) {
+            const ul = document.getElementById('localTaskList');
+            const empty = document.getElementById('localEmpty');
+            ul.innerHTML = '';
+            const tasks = data.brigadeTasks[brigade] || [];
+            if (tasks.length === 0) { empty.classList.remove('hidden'); return; }
+            empty.classList.add('hidden');
+            tasks.forEach(task => {
+                const checked = data.completions[brigade] && data.completions[brigade]['l_' + task.id];
+                ul.appendChild(createTaskItem(task, checked, (val) => {
+                    if (!data.completions[brigade]) data.completions[brigade] = {};
+                    data.completions[brigade]['l_' + task.id] = val;
+                    saveData();
+                    updateStats(brigade);
+                }, true, () => deleteLocalTask(brigade, task.id)));
+            });
+        }
+
+        function createTaskItem(task, checked, onChange, canDelete, onDelete) {
+            const li = document.createElement('li');
+            li.className = 'task-row p-4 hover:bg-gray-50 transition flex gap-3 items-start';
+            const checkId = 'cb_' + Math.random().toString(36).substr(2, 8);
+            li.innerHTML = `
+        <input type="checkbox" id="${checkId}" class="task-checkbox" ${checked ? 'checked' : ''}>
+        <label for="${checkId}" class="flex-1 cursor-pointer">
+            <span class="task-title flex items-center gap-2 font-bold text-gray-800 mb-0.5">
+                ${task.title}
+                ${task.urgent ? '<span class="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full font-bold shrink-0">חובת עדכון</span>' : ''}
+                ${task.category ? '<span class="bg-idf/10 text-idf text-xs px-2 py-0.5 rounded-full shrink-0">' + task.category + '</span>' : ''}
+            </span>
+            ${task.desc ? '<span class="task-desc block text-sm text-gray-500">' + task.desc + '</span>' : ''}
+        </label>
+        ${canDelete ? '<button class="no-print text-gray-300 hover:text-red-400 transition shrink-0 mt-0.5" onclick="this.closest(\'li\').remove(); onDelete && onDelete()"><i class="ph ph-trash text-lg"></i></button>' : ''}
+    `;
+            li.querySelector('input').addEventListener('change', (e) => onChange(e.target.checked));
+            if (canDelete && onDelete) {
+                li.querySelector('button')?.addEventListener('click', onDelete);
+            }
+            return li;
+        }
+
+        function updateStats(brigade) {
+            const globalCount = data.globalTasks.length;
+            const localCount = (data.brigadeTasks[brigade] || []).length;
+            const total = globalCount + localCount;
+            const comp = data.completions[brigade] || {};
+            const done = Object.values(comp).filter(Boolean).length;
+            document.getElementById('statTotal').textContent = total;
+            document.getElementById('statDone').textContent = done;
+            document.getElementById('statLeft').textContent = Math.max(0, total - done);
+            const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+            document.getElementById('progressBar').style.width = pct + '%';
+        }
+
+        function deleteLocalTask(brigade, taskId) {
+            data.brigadeTasks[brigade] = (data.brigadeTasks[brigade] || []).filter(t => t.id !== taskId);
+            delete (data.completions[brigade] || {})['l_' + taskId];
+            saveData();
+            renderLocalTaskList(brigade);
+            updateStats(brigade);
+        }
+
+        // ─── RENDER: DIVISION ─────────────────────────────────────────
+        function renderDivisionView() {
+            renderGlobalTaskListAdmin();
+            renderOverviewGrid();
+            BRIGADES.forEach(b => renderBrigadeTabForAdmin(b));
+        }
+
+        function renderGlobalTaskListAdmin() {
+            const ul = document.getElementById('globalTaskListAdmin');
+            const empty = document.getElementById('globalEmptyAdmin');
+            ul.innerHTML = '';
+            if (!data.globalTasks || data.globalTasks.length === 0) {
+                empty.classList.remove('hidden'); return;
+            }
+            empty.classList.add('hidden');
+            data.globalTasks.forEach(task => {
+                const li = document.createElement('li');
+                li.className = 'p-4 flex gap-3 items-start hover:bg-gray-50';
+                li.innerHTML = `
+            <div class="flex-1">
+                <span class="flex items-center gap-2 font-bold text-gray-800 mb-0.5">
+                    ${task.title}
+                    ${task.urgent ? '<span class="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full font-bold">חובת עדכון</span>' : ''}
+                    ${task.category ? '<span class="bg-idf/10 text-idf text-xs px-2 py-0.5 rounded-full">' + task.category + '</span>' : ''}
+                </span>
+                ${task.desc ? '<span class="block text-sm text-gray-500">' + task.desc + '</span>' : ''}
+            </div>
+            <button class="no-print text-gray-300 hover:text-red-400 transition shrink-0" onclick="deleteGlobalTask('${task.id}')"><i class="ph ph-trash text-lg"></i></button>
+        `;
+                ul.appendChild(li);
+            });
+        }
+
+        function renderOverviewGrid() {
+            const grid = document.getElementById('overviewGrid');
+            grid.innerHTML = '';
+            BRIGADES.forEach(b => {
+                const total = data.globalTasks.length + (data.brigadeTasks[b] || []).length;
+                const comp = data.completions[b] || {};
+                const done = Object.values(comp).filter(Boolean).length;
+                const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+                const color = pct === 100 ? 'border-green-500 bg-green-50' : pct >= 50 ? 'border-yellow-400 bg-yellow-50' : 'border-red-300 bg-red-50';
+                const textColor = pct === 100 ? 'text-green-600' : pct >= 50 ? 'text-yellow-600' : 'text-red-500';
+                grid.innerHTML += `
+            <div class="border-2 ${color} rounded-xl p-4 cursor-pointer hover:shadow-md transition" onclick="switchTab('${b}')">
+                <p class="font-bold text-gray-700 mb-2">${b}</p>
+                <p class="text-3xl font-extrabold ${textColor}">${pct}%</p>
+                <p class="text-xs text-gray-500 mt-1">${done} / ${total} משימות</p>
+                <div class="bg-gray-200 rounded-full h-1.5 mt-2">
+                    <div class="bg-idf h-1.5 rounded-full" style="width:${pct}%"></div>
+                </div>
+            </div>`;
+            });
+        }
+
+        function renderBrigadeTabForAdmin(brigade) {
+            const container = document.getElementById('tab-' + brigade);
+            container.innerHTML = '';
+            const globalCount = data.globalTasks.length;
+            const localTasks = data.brigadeTasks[brigade] || [];
+            const total = globalCount + localTasks.length;
+            const comp = data.completions[brigade] || {};
+            const done = Object.values(comp).filter(Boolean).length;
+            const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+
+            container.innerHTML = `
+        <div class="space-y-5">
+            <div class="bg-white rounded-2xl shadow-sm p-5 flex items-center gap-4">
+                <div class="text-center">
+                    <p class="text-4xl font-extrabold text-idf">${pct}%</p>
+                    <p class="text-xs text-gray-500">הושלם</p>
+                </div>
+                <div class="flex-1">
+                    <div class="bg-gray-200 rounded-full h-3">
+                        <div class="bg-idf h-3 rounded-full transition-all" style="width:${pct}%"></div>
+                    </div>
+                    <p class="text-sm text-gray-500 mt-1">${done} מתוך ${total} משימות הושלמו</p>
+                </div>
+            </div>
+
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-broadcast text-gold"></i> משימות אוגדתיות</h3>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <ul class="divide-y divide-gray-100">
+                        ${data.globalTasks.map(task => {
+                const checked = comp['g_' + task.id];
+                return `<li class="task-row p-4 flex gap-3 items-start ${checked ? 'opacity-75 bg-gray-50' : ''}">
+                                <div class="w-5 h-5 rounded-md border-2 ${checked ? 'bg-idf border-idf' : 'border-gray-300'} flex items-center justify-center shrink-0 mt-0.5">
+                                    ${checked ? '<i class="ph-fill ph-check text-white text-xs"></i>' : ''}
+                                </div>
+                                <div>
+                                    <span class="font-bold ${checked ? 'line-through text-gray-400' : 'text-gray-800'}">${task.title}</span>
+                                    ${task.urgent ? '<span class="mr-2 bg-red-100 text-red-700 text-xs px-1.5 py-0.5 rounded-full">חובת עדכון</span>' : ''}
+                                </div>
+                            </li>`;
+            }).join('')}
+                    </ul>
+                </div>
+            </div>
+
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-list-checks text-idf"></i> משימות חטמ"ר ${brigade}</h3>
+                    <button onclick="openAddTaskModal('${brigade}')" class="no-print flex items-center gap-1 bg-idf text-white text-sm px-4 py-2 rounded-full hover:bg-idf-light transition font-bold">
+                        <i class="ph ph-plus"></i> הוסף
+                    </button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <ul class="divide-y divide-gray-100" id="adminLocalList_${brigade}">
+                        ${localTasks.length === 0 ? '<li class="p-5 text-center text-gray-400 text-sm">אין משימות ספציפיות</li>' : ''}
+                        ${localTasks.map(task => {
+                const checked = comp['l_' + task.id];
+                return `<li class="task-row p-4 flex gap-3 items-start ${checked ? 'opacity-75 bg-gray-50' : ''}">
+                                <div class="w-5 h-5 rounded-md border-2 ${checked ? 'bg-idf border-idf' : 'border-gray-300'} flex items-center justify-center shrink-0 mt-0.5">
+                                    ${checked ? '<i class="ph-fill ph-check text-white text-xs"></i>' : ''}
+                                </div>
+                                <div class="flex-1">
+                                    <span class="font-bold ${checked ? 'line-through text-gray-400' : 'text-gray-800'}">${task.title}</span>
+                                    ${task.urgent ? '<span class="mr-2 bg-red-100 text-red-700 text-xs px-1.5 py-0.5 rounded-full">חובת עדכון</span>' : ''}
+                                    ${task.desc ? '<span class="block text-sm text-gray-500">' + task.desc + '</span>' : ''}
+                                </div>
+                                <button class="no-print text-gray-300 hover:text-red-400" onclick="deleteLocalTaskFromAdmin('${brigade}', '${task.id}')"><i class="ph ph-trash text-lg"></i></button>
+                            </li>`;
+            }).join('')}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    `;
+        }
+
+        function deleteGlobalTask(taskId) {
+            if (!confirm('האם למחוק משימה זו מכל החטמ"רים?')) return;
+            data.globalTasks = data.globalTasks.filter(t => t.id !== taskId);
+            saveData();
+            renderDivisionView();
+        }
+
+        function deleteLocalTaskFromAdmin(brigade, taskId) {
+            data.brigadeTasks[brigade] = (data.brigadeTasks[brigade] || []).filter(t => t.id !== taskId);
+            delete (data.completions[brigade] || {})['l_' + taskId];
+            saveData();
+            renderBrigadeTabForAdmin(brigade);
+            renderOverviewGrid();
+        }
+
+        // ─── TABS ─────────────────────────────────────────────────────
+        function switchTab(name) {
+            currentTab = name;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.classList.add('text-gray-300');
+                btn.classList.remove('text-white');
+            });
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const btn = [...document.querySelectorAll('.tab-btn')].find(b => b.textContent.trim().includes(name === 'כולם' ? 'סקירה' : name));
+            if (btn) { btn.classList.add('active'); btn.classList.remove('text-gray-300'); }
+            const tab = document.getElementById('tab-' + name);
+            if (tab) tab.classList.add('active');
+        }
+
+        // ─── MODAL ───────────────────────────────────────────────────
+        function openAddTaskModal(mode) {
+            modalMode = mode;
+            const titles = { global: 'הוספת משימה לכל החטמ"רים', local: 'הוספת משימה אישית' };
+            document.getElementById('modalTitle').textContent = titles[mode] || 'הוספת משימה לחטמ"ר ' + mode;
+            document.getElementById('taskTitleInput').value = '';
+            document.getElementById('taskDescInput').value = '';
+            document.getElementById('taskUrgentInput').checked = false;
+            document.getElementById('addTaskModal').classList.remove('hidden');
+            document.getElementById('taskTitleInput').focus();
+        }
+        function closeModal() { document.getElementById('addTaskModal').classList.add('hidden'); }
+
+        function submitTask() {
+            const title = document.getElementById('taskTitleInput').value.trim();
+            if (!title) { document.getElementById('taskTitleInput').focus(); return; }
+            const task = {
+                id: Date.now().toString(),
+                title,
+                desc: document.getElementById('taskDescInput').value.trim(),
+                urgent: document.getElementById('taskUrgentInput').checked,
+                category: ''
+            };
+            if (modalMode === 'global') {
+                data.globalTasks.push(task);
+                saveData();
+                renderGlobalTaskListAdmin();
+                renderOverviewGrid();
+                BRIGADES.forEach(b => renderBrigadeTabForAdmin(b));
+            } else if (modalMode === 'local') {
+                if (!data.brigadeTasks[currentUser]) data.brigadeTasks[currentUser] = [];
+                data.brigadeTasks[currentUser].push(task);
+                saveData();
+                renderLocalTaskList(currentUser);
+                updateStats(currentUser);
+            } else {
+                // adding to specific brigade from admin
+                if (!data.brigadeTasks[modalMode]) data.brigadeTasks[modalMode] = [];
+                data.brigadeTasks[modalMode].push(task);
+                saveData();
+                renderBrigadeTabForAdmin(modalMode);
+                renderOverviewGrid();
+            }
+            closeModal();
+        }
+
+        // ─── EXCEL EXPORT ────────────────────────────────────────────
+        function exportToExcel() {
+            const wb = XLSX.utils.book_new();
+            // Global tasks sheet
+            const globalRows = [['#', 'כותרת', 'פירוט', 'קטגוריה', 'חובת עדכון', ...BRIGADES.map(b => 'ביצוע - ' + b)]];
+            data.globalTasks.forEach((t, i) => {
+                const row = [i + 1, t.title, t.desc, t.category || '', t.urgent ? 'כן' : ''];
+                BRIGADES.forEach(b => {
+                    const comp = data.completions[b] || {};
+                    row.push(comp['g_' + t.id] ? '✓' : '');
+                });
+                globalRows.push(row);
+            });
+            const ws1 = XLSX.utils.aoa_to_sheet(globalRows);
+            ws1['!cols'] = [{ wch: 4 }, { wch: 35 }, { wch: 55 }, { wch: 10 }, { wch: 12 }, ...BRIGADES.map(() => ({ wch: 14 }))];
+            ws1['!rtl'] = true;
+            XLSX.utils.book_append_sheet(wb, ws1, 'משימות אוגדתיות');
+
+            // Per brigade sheets
+            BRIGADES.forEach(b => {
+                const rows = [['#', 'כותרת', 'פירוט', 'חובת עדכון', 'בוצע']];
+                const comp = data.completions[b] || {};
+                data.globalTasks.forEach((t, i) => {
+                    rows.push([i + 1, t.title, t.desc, t.urgent ? 'כן' : '', comp['g_' + t.id] ? '✓' : '']);
+                });
+                (data.brigadeTasks[b] || []).forEach((t, i) => {
+                    rows.push([data.globalTasks.length + i + 1, t.title, t.desc, t.urgent ? 'כן' : '', comp['l_' + t.id] ? '✓' : '']);
+                });
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 4 }, { wch: 35 }, { wch: 55 }, { wch: 12 }, { wch: 8 }];
+                ws['!rtl'] = true;
+                XLSX.utils.book_append_sheet(wb, ws, b);
+            });
+
+            XLSX.writeFile(wb, 'משימות_רבנות_פורים_פסח.xlsx');
+        }
+
+        // ─── KEYBOARD ────────────────────────────────────────────────
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeModal();
+            if (e.key === 'Enter' && !document.getElementById('addTaskModal').classList.contains('hidden')) {
+                if (e.target.tagName !== 'TEXTAREA') submitTask();
+            }
+        });
+
+        // ─── INIT ─────────────────────────────────────────────────────
+        loadData();
+        const savedUser = localStorage.getItem('currentUser');
+        if (savedUser) {
+            login(savedUser);
+        } else {
+            document.getElementById('loginScreen').classList.remove('hidden');
+        }
+    </script>
+</body>
+
+</html>
